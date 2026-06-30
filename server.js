@@ -85,6 +85,16 @@ const transporter = nodemailer.createTransport({
     },
 });
 
+// Verify transporter configuration at startup so credential
+// problems surface immediately instead of on the first send.
+transporter.verify((error) => {
+    if (error) {
+        console.error('Email transporter verification failed:', error.message);
+    } else {
+        console.log('Email transporter is configured and ready.');
+    }
+});
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -155,7 +165,7 @@ app.post('/api/contact', contactLimiter, (req, res) => {
 
     transporter.sendMail(mailOptions, (error) => {
         if (error) {
-            console.error('Email dispatch failure:', error);
+            console.error('Email dispatch failure:', error.message);
             return res.status(500).json({ error: 'Failed to deliver message. Please try again later.' });
         }
         res.status(200).json({ message: 'Inquiry successfully sent!' });
@@ -164,9 +174,48 @@ app.post('/api/contact', contactLimiter, (req, res) => {
 
 // Fallback to serve frontend
 app.get('/{*splat}', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
+    const filePath = path.join(__dirname, 'index.html');
+    res.sendFile(filePath, (err) => {
+        if (err) {
+            console.error('Failed to serve index.html:', err.message);
+            if (!res.headersSent) {
+                res.status(500).send('Unable to load the page. Please try again later.');
+            }
+        }
+    });
 });
 
-app.listen(PORT, () => {
+// Global error handler — catches malformed JSON, unexpected middleware
+// errors, and anything forwarded with next(err).
+app.use((err, req, res, _next) => {
+    if (err.type === 'entity.parse.failed') {
+        return res.status(400).json({ error: 'Invalid JSON in request body.' });
+    }
+    console.error('Unhandled server error:', err.message || err);
+    if (!res.headersSent) {
+        res.status(500).json({ error: 'An unexpected server error occurred.' });
+    }
+});
+
+// Process-level safety nets
+process.on('unhandledRejection', (reason) => {
+    console.error('Unhandled promise rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught exception:', err.message);
+    process.exit(1);
+});
+
+const server = app.listen(PORT, () => {
     console.log(`Server listening on port ${PORT}`);
+});
+
+server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        console.error(`Port ${PORT} is already in use. Choose a different port.`);
+    } else {
+        console.error('Server failed to start:', err.message);
+    }
+    process.exit(1);
 });
