@@ -184,16 +184,24 @@
                     body: JSON.stringify(payload)
                 });
 
-                const data = await response.json();
+                let data;
+                try {
+                    data = await response.json();
+                } catch (parseError) {
+                    console.error('Failed to parse server response:', parseError);
+                    alert('Server returned an unexpected response. Please try again later.');
+                    return;
+                }
 
                 if (response.ok) {
-                    alert('✨ Message sent successfully! Your dad will see it in his email inbox.');
+                    alert('Message sent successfully! Your inquiry will be reviewed shortly.');
                     document.getElementById('corporateContactForm').reset();
                 } else {
-                    alert(`Submission Failed: ${data.error}`);
+                    alert(`Submission Failed: ${data.error || 'Unknown server error.'}`);
                 }
             } catch (err) {
-                alert('Communication breakdown with backend server execution engine.');
+                console.error('Contact form submission error:', err);
+                alert('Unable to reach the server. Please check your connection and try again.');
             } finally {
                 submitBtn.innerText = "Submit Business Briefing & Dispatches";
                 submitBtn.disabled = false;
