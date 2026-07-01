@@ -6,14 +6,16 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 
+const config = require('./config');
+const { validateRequiredFields, isValidEmail } = require('./utils/validation');
+const { buildMailOptions } = require('./utils/emailTemplate');
+
 const app = express();
-const PORT = process.env.PORT || 5000;
 
 // ---------------------------------------------------------------------------
 // Security middleware
 // ---------------------------------------------------------------------------
 
-// HTTP security headers (XSS protection, clickjacking prevention, etc.)
 app.use(
     helmet({
         contentSecurityPolicy: {
@@ -32,12 +34,11 @@ app.use(
 // CORS – restrict to known origins instead of allowing every domain
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(',')
-    : [`http://localhost:${PORT}`];
+    : [`http://localhost:${config.port}`];
 
 app.use(
     cors({
         origin(origin, callback) {
-            // Allow requests with no origin (server-to-server, curl, etc.)
             if (!origin || ALLOWED_ORIGINS.includes(origin)) {
                 return callback(null, true);
             }
@@ -60,17 +61,14 @@ const contactLimiter = rateLimit({
 });
 
 // Serve static files
+app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.static(path.join(__dirname)));
 
 // ---------------------------------------------------------------------------
-// Email configuration – credentials come from environment variables
+// Email configuration – credentials from shared config (env vars via dotenv)
 // ---------------------------------------------------------------------------
 
-const EMAIL_USER = process.env.EMAIL_USER;
-const EMAIL_PASS = process.env.EMAIL_PASS;
-const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL;
-
-if (!EMAIL_USER || !EMAIL_PASS || !NOTIFY_EMAIL) {
+if (!config.email.senderAddress || !config.email.senderPassword || !config.email.recipientAddress) {
     console.warn(
         'WARNING: EMAIL_USER, EMAIL_PASS, or NOTIFY_EMAIL is not set. ' +
         'The contact form will not be able to send emails.'
@@ -78,36 +76,12 @@ if (!EMAIL_USER || !EMAIL_PASS || !NOTIFY_EMAIL) {
 }
 
 const transporter = nodemailer.createTransport({
-    service: 'gmail',
+    service: config.email.service,
     auth: {
-        user: EMAIL_USER,
-        pass: EMAIL_PASS,
+        user: config.email.senderAddress,
+        pass: config.email.senderPassword,
     },
 });
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Escape HTML special characters to prevent HTML injection in emails.
- */
-function escapeHtml(str) {
-    if (typeof str !== 'string') return '';
-    return str
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-}
-
-/**
- * Basic email-format validation.
- */
-function isValidEmail(email) {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
 
 // ---------------------------------------------------------------------------
 // API route – contact form
@@ -116,42 +90,24 @@ function isValidEmail(email) {
 app.post('/api/contact', contactLimiter, (req, res) => {
     const { name, email, phone, service, message } = req.body;
 
-    if (!name || !email || !message) {
-        return res.status(400).json({ error: 'Name, Email, and Message fields are required.' });
+    // Validation via shared utility
+    const { valid, missing } = validateRequiredFields(req.body, ['name', 'email', 'message']);
+    if (!valid) {
+        return res.status(400).json({
+            error: `The following fields are required: ${missing.join(', ')}.`,
+        });
     }
 
     if (!isValidEmail(email)) {
         return res.status(400).json({ error: 'Please provide a valid email address.' });
     }
 
-    if (!EMAIL_USER || !EMAIL_PASS || !NOTIFY_EMAIL) {
+    if (!config.email.senderAddress || !config.email.senderPassword || !config.email.recipientAddress) {
         return res.status(503).json({ error: 'Email service is not configured.' });
     }
 
-    // Sanitize every user-supplied value before embedding in HTML
-    const safeName = escapeHtml(name);
-    const safeEmail = escapeHtml(email);
-    const safePhone = escapeHtml(phone);
-    const safeService = escapeHtml(service);
-    const safeMessage = escapeHtml(message);
-
-    const mailOptions = {
-        from: EMAIL_USER,
-        to: NOTIFY_EMAIL,
-        subject: `New Business Inquiry from ${safeName}`,
-        html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-                <h2 style="color: #1e3a8a; border-bottom: 2px solid #1e3a8a; padding-bottom: 10px;">New Service Inquiry</h2>
-                <p><strong>Client Name:</strong> ${safeName}</p>
-                <p><strong>Client Email:</strong> ${safeEmail}</p>
-                <p><strong>Phone Number:</strong> ${safePhone || 'Not Provided'}</p>
-                <p><strong>Service Requested:</strong> ${safeService || 'General Inquiry'}</p>
-                <div style="background-color: #f8fafc; padding: 15px; border-left: 4px solid #3b82f6; margin-top: 15px;">
-                    <p style="margin: 0; font-style: italic;">"${safeMessage}"</p>
-                </div>
-            </div>
-        `,
-    };
+    // Build mail options via shared template utility (sanitization handled inside)
+    const mailOptions = buildMailOptions(config.email, { name, email, phone, service, message });
 
     transporter.sendMail(mailOptions, (error) => {
         if (error) {
@@ -163,10 +119,10 @@ app.post('/api/contact', contactLimiter, (req, res) => {
 });
 
 // Fallback to serve frontend
-app.get('/{*splat}', (req, res) => {
+app.get('{*path}', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-app.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
+app.listen(config.port, () => {
+    console.log(`Server listening on port ${config.port}`);
 });
