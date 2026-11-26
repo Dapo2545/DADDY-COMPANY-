@@ -124,7 +124,7 @@ function isValidEmail(email) {
 // ---------------------------------------------------------------------------
 
 app.post('/api/contact', contactLimiter, (req, res) => {
-    const { name, email, phone, service, message } = req.body;
+    const { name, email, phone, service, message } = req.body || {};
 
     if (!name || !email || !message) {
         return res.status(400).json({ error: 'Name, Email, and Message fields are required.' });
@@ -148,7 +148,7 @@ app.post('/api/contact', contactLimiter, (req, res) => {
     const mailOptions = {
         from: EMAIL_USER,
         to: NOTIFY_EMAIL,
-        subject: `New Business Inquiry from ${safeName}`,
+        subject: `New Business Inquiry from ${String(name).trim().slice(0, 100)}`,
         html: `
             <div style="font-family: Arial, sans-serif; max-width: 600px; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
                 <h2 style="color: #1e3a8a; border-bottom: 2px solid #1e3a8a; padding-bottom: 10px;">New Service Inquiry</h2>
